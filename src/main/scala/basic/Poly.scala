@@ -58,7 +58,7 @@ case class Poly(cmonos: Seq[(Mono,Q)])(implicit mo: MonomialOrder) {
   def / (mono:Mono=Mono(mo.vars.map{s => 0}), q:Q=Q(1,1)): Poly = 
     if (q.n==0) Poly(Nil) else Poly(cms.map{case (m,c) => (m/mono,c/q)})
   def divmod(fs: Seq[Poly]):(Seq[Poly], Poly) = {
-    println("divmod")
+    //println("divmod")
     if (cms.isEmpty) (fs.map{f => Poly(Nil)}, Poly(Nil)) 
     else {
       val s:Int = fs.length
@@ -143,6 +143,37 @@ object Poly {
       val fj = gs(j)
       if ((Mono.LCM(fi.LM, fj.LM) != (fi.LM * fj.LM)) && (!criterion(i,j))) {
         val spair = Poly.S(fi, fj).bar(gs)
+        if (spair != Poly(Nil)) {
+          t = t+1
+          gs += spair
+          for(ii <- Range(0, t-1)) yield {b += ((ii,t-1))}
+        }
+      }
+      b -= ((i,j))
+    }    
+    gs.toSeq
+  }
+  def buchberger3(fs: Seq[Poly])(implicit mo: MonomialOrder): Seq[Poly] = {
+    val s: Int = fs.length
+    val b:scala.collection.mutable.Set[(Int,Int)] = scala.collection.mutable.Set.empty
+    for(i <- Range(0,s); j <- Range(i+1, s)) yield {b += ((i,j))}
+    val gs: scala.collection.mutable.ArrayBuffer[Poly] = scala.collection.mutable.ArrayBuffer[Poly](fs:_*)
+    var t: Int = s
+    //
+    def criterion(i:Int, j:Int): Boolean = {
+      val lcm = Mono.LCM(gs(i).LM, gs(j).LM)
+      Range(0, t).exists{k =>
+        (k!=i) && (k!=j) && (!b.contains((i,k))) && (!b.contains((k,i))) && (!b.contains((j,k))) && (!b.contains((k,j))) &&
+        (gs(k).LM | lcm)
+      }
+    }
+    //
+    while(!b.isEmpty) {
+      val (i, j) = b.toSeq.sortBy{ij => Mono.LCM(gs(ij._1).LM, gs(ij._2).LM).deg}.head
+      val fi = gs(i)
+      val fj = gs(j)
+      if ((Mono.LCM(fi.LM, fj.LM) != (fi.LM * fj.LM)) && (!criterion(i,j))) {
+        val spair = Poly.S(fi, fj).bar(gs.sortBy{g => g.LM.deg})
         if (spair != Poly(Nil)) {
           t = t+1
           gs += spair
