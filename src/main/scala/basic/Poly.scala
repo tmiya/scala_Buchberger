@@ -1,102 +1,146 @@
 package basic
 
-case class Poly(cmonos: Seq[(Mono,Q)])(implicit mo: MonomialOrder) {
-  val cms: Seq[(Mono,Q)] = cmonos.filter{case (_,c) => c.n != 0}.sortWith{case (cx, cy) => cy._1 < cx._1}
+import scala.collection.mutable.{Map => MMap, ArrayBuffer => MArray, Set => MSet}
+import scala.util.matching.Regex
+
+/** Polynomial
+ * @tparam R underlying ring for K
+ * @tparam K field for coefficient
+ * @tparam T term
+ * @tparam P this polynomial  
+ */
+trait Poly[R, K <: Field[R,K], T <: Term[R,K,T], P <: Poly[R,K,T,P]] {
+  self:P =>
+  /** class manifest for P */
+  val manifestP: ClassManifest[P]
+  /** generate Term from m and k
+   * @param m monomial
+   * @param k coefficient
+   */
+  def genTerm(m: Mono, k:K): T
+  /** generate Poly from Terms
+   * @param ts sequence of Term
+   */
+  def genPoly(ts: Seq[T]): P
+  /** raw args for constructor */
+  val rawTerms: Seq[T]
+  /** monomial order */
+  val mo: MonomialOrder
+  /** terms, filtered by nonzero coefficient, and ordered (first = highest) */
+  val ts: Seq[T] = rawTerms.filter{!_.isZero}.sortWith{case (cx, cy) => cy.m < cx.m}
+  /** string representation */
   override def toString: String = 
-    if (cms.length == 0) "0" 
-    else cms.map{case (m,c) => {
-      val (cs, ms) = (c.toString, m.toString)
+    if (isZero) "0" 
+    else ts.map{case t => {
+      val (cs, ms) = (t.k.toString, t.m.toString)
       if (ms == "1") cs
       else if (cs == "1") ms
       else if (cs == "-1") "-"+ms
       else cs+ms
     }}.mkString(" + ")
-  override def equals(a:Any): Boolean = a.isInstanceOf[Poly] && (cms == a.asInstanceOf[Poly].cms)
-  def LT: (Mono,Q) = cms.head
-  def LC: Q = cms.head._2
-  def LM: Mono = cms.head._1
-  def + (rhs: Poly): Poly = {
-    val map: scala.collection.mutable.Map[Mono,Q] = scala.collection.mutable.Map(cms:_*)
-    rhs.cms.foreach{case (m,c) => map.get(m) match {
-      case None => map.put(m, c)
-      case Some(q) => {var s = q+c; if (s.n==0) map.remove(m) else map(m) = s}
-    }}
-    Poly(map.toSeq)
-  }
-  def + (m: Mono, c:Q): Poly = {
-    val map: scala.collection.mutable.Map[Mono,Q] = scala.collection.mutable.Map(cms:_*)
+  /** equality is defined by ts */
+  override def equals(a:Any): Boolean = a.isInstanceOf[P] && (ts == a.asInstanceOf[P].ts)
+  /** leading term */
+  def LT: T = ts.head
+  /** leading coefficient */
+  def LC: K = ts.head.k
+  /** leading monomial */
+  def LM: Mono = ts.head.m
+  /** is zero-polynomial */
+  def isZero: Boolean = ts.isEmpty
+  /** zero polynomial */
+  val zero: P
+
+  // internal functions for polynomial operations 
+  private def ts2mmap: MMap[Mono,K] = MMap(ts.map{t => (t.m, t.k)}: _*)
+  private def mmap2ts(map: MMap[Mono,K]): Seq[T] = map.toSeq.map{t => genTerm(t._1, t._2)}
+  private def add2mmap(map: MMap[Mono,K], m:Mono, k:K): Unit = {
     map.get(m) match {
-      case None => map.put(m,c)
-      case Some(q) => {var s = q + c; if (s.n==0) map.remove(m) else map(m) = s}
+      case None => map.put(m, k)
+      case Some(kk) => {val sum = kk + k; if (sum.isZero) map.remove(m) else map(m) = sum}
     }
-    Poly(map.toSeq)
   }
-  def + (t: (Mono,Q)): Poly = this + (t._1, t._2)
-  def - (t: (Mono,Q)): Poly = this + (t._1, -t._2)
-  def - (rhs: Poly): Poly = {
-    val map: scala.collection.mutable.Map[Mono,Q] = scala.collection.mutable.Map(cms:_*)
-    rhs.cms.foreach{case (m,c) => map.get(m) match {
-      case None => map.put(m, -c)
-      case Some(q) => {var s = q - c; if (s.n==0) map.remove(m) else map(m) = s}
-    }}
-    Poly(map.toSeq)
+  def + (m: Mono, k: K): P = {
+    val map: MMap[Mono,K] = ts2mmap
+    add2mmap(map, m, k)
+    genPoly(mmap2ts(map))
   }
-  def * (mono:Mono, q:Q): Poly = 
-    if (q.n==0) Poly(Nil) else Poly(cms.map{case (m,c) => (m*mono,c*q)})
-  def * (rhs: Poly): Poly = {
-    val map: scala.collection.mutable.Map[Mono,Q] = scala.collection.mutable.Map.empty
-    for((m1,c1) <- cms; (m2,c2) <- rhs.cms)
-    yield {
-      val m = m1*m2
-      map.get(m) match {
-        case None => map.put(m, c1*c2)
-        case Some(q) => {var s = q+c1*c2; if (s.n==0) map.remove(m) else map(m) = s}
-      }
-    }
-    Poly(map.toSeq)
+  def - (m: Mono, k:K): P = this + (m, -k)
+  def + (t: T): P = this + (t.m, t.k)
+  def - (t: T): P = this + (t.m, -t.k)
+  def + (rhs: P): P = {
+    val map: MMap[Mono,K] = ts2mmap
+    rhs.ts.foreach{t => add2mmap(map, t.m, t.k)}
+    genPoly(mmap2ts(map))
   }
-  def / (mono:Mono=Mono(mo.vars.map{s => 0}), q:Q=Q(1,1)): Poly = 
-    if (q.n==0) Poly(Nil) else Poly(cms.map{case (m,c) => (m/mono,c/q)})
-  def divmod(fs: Seq[Poly]):(Seq[Poly], Poly) = {
-    //println("divmod")
-    if (cms.isEmpty) (fs.map{f => Poly(Nil)}, Poly(Nil)) 
+  def - (rhs: P): P = {
+    val map: MMap[Mono,K] = ts2mmap
+    rhs.ts.foreach{t => add2mmap(map, t.m, -t.k)}
+    genPoly(mmap2ts(map))
+  }
+  def * (k:K): P = 
+    if (k.isZero) zero else genPoly(ts.map{t => genTerm(t.m, t.k*k)})
+  def * (m:Mono, k:K): P = 
+    if (k.isZero) zero else genPoly(ts.map{t => genTerm(t.m*m, t.k*k)})
+  def * (t: T): P = this * (t.m, t.k)
+  def * (rhs: P): P = {
+    val map: MMap[Mono,K] = MMap.empty
+    for(t <- this.ts; rt <- rhs.ts) yield {add2mmap(map, t.m*rt.m, t.k*rt.k)}
+    genPoly(mmap2ts(map))
+  }
+  def / (k:K): P = genPoly(ts.map{t => genTerm(t.m, t.k/k)})
+  def / (m:Mono, k:K): P = 
+    if (k.isZero) throw new ArithmeticException("div by zero") 
+    else genPoly(ts.map{case t => genTerm(t.m/m, t.k/k)})
+  def / (t: T): P = this / (t.m, t.k)
+  def divmod(fs: Seq[P]):(Seq[P], P) = {
+    if (ts.isEmpty) (fs.map{f => genPoly(Nil)}, genPoly(Nil)) 
     else {
       val s:Int = fs.length
-      var r:Poly = Poly(Nil)
-      val a:Array[Poly] = fs.view.map{f => Poly(Nil)}.toArray
-      var p:Poly = this
-      while(p != Poly(Nil)) {
+      var r:P = genPoly(Nil)
+      val a:Array[P] = Array.fill(fs.length)(zero)(manifestP)
+      var p:P = this
+      while(!p.isZero) {
         var i = 0
         var div_occur = false
         while(i < s && !div_occur) {
-          if (fs(i).LM | p.LM) {
-            val m = p.LM / fs(i).LM
-            val c = p.LC / fs(i).LC
-            a(i) = a(i) + (m,c)
-            p = p - fs(i) * (m,c)
+          if (fs(i).LT | p.LT) {
+            val t = p.LT / fs(i).LT
+            a(i) = a(i) + t
+            p = p - fs(i) * t
             div_occur = true
           } else {i += 1}
         }
         if (!div_occur) {
           r = r + p.LT
-          p = p - (p.LM, p.LC)
+          p = p - p.LT
         }
       }
       (a.toSeq, r)
     }
   }
-  def bar(fs: Seq[Poly]): Poly = divmod(fs)._2
+  def bar(fs: Seq[P]): P = divmod(fs)._2
 }
-object Poly {
-  def S(f:Poly, g:Poly)(implicit mo: MonomialOrder): Poly = {
+
+
+case class QPoly(rawTerms: Seq[QTerm])(implicit monoOrd: MonomialOrder) extends Poly[BigInt,Q,QTerm,QPoly] {
+  val manifestP = classManifest[QPoly]
+  val mo: MonomialOrder = monoOrd
+  lazy val zero: QPoly = QPoly(Nil)
+  def genTerm(m: Mono, k:Q): QTerm = QTerm(m, k)
+  def genPoly(qts: Seq[QTerm]): QPoly = QPoly(qts)
+}
+
+object Poly {  
+  def S[R, K<:Field[R,K], T<:Term[R,K,T], P<:Poly[R,K,T,P]](f:P, g:P)(implicit mo: MonomialOrder): P = {
     val xg = Mono.LCM(f.LM, g.LM)
     f * (xg / f.LM, f.LC.inv) - g * (xg / g.LM, g.LC.inv)
   }
-  def buchberger(fs: Seq[Poly])(implicit mo: MonomialOrder): Seq[Poly] = {
-    var gs: scala.collection.mutable.ArrayBuffer[Poly] = scala.collection.mutable.ArrayBuffer[Poly](fs:_*)
+  def buchberger[R, K<:Field[R,K], T<:Term[R,K,T], P<:Poly[R,K,T,P]](fs: Seq[P])(implicit mo: MonomialOrder): Seq[P] = {
+    var gs: MArray[P] = MArray[P](fs:_*)
     var cont = true
     while(cont) {
-      val gss = scala.collection.mutable.ArrayBuffer[Poly](gs:_*)
+      val gss = MArray[P](gs:_*)
       val nss = gss.length
       var found = false
       var i = 0
@@ -105,8 +149,8 @@ object Poly {
         var j = i+1
         while(!found && j<nss) {
           val q = gss(j)
-          val s = Poly.S(p,q).bar(gss)
-          if (s != Poly(Nil)) {gs += s; found = true}
+          val s = Poly.S[R,K,T,P](p,q).bar(gss)
+          if (!s.isZero) {gs += s; found = true}
           j += 1
         }
         i += 1
@@ -115,18 +159,20 @@ object Poly {
     }
     gs.toSeq
   }
-  def reduce(fs: Seq[Poly])(implicit mo: MonomialOrder): Seq[Poly] = {
-    def red(ps: List[Poly], acc:List[Poly]): List[Poly] = ps match {
+  def reduce[R, K<:Field[R,K], T<:Term[R,K,T], P<:Poly[R,K,T,P]](fs: Seq[P])(implicit mo: MonomialOrder): Seq[P] = {
+    def red(ps: List[P], acc:List[P]): List[P] = ps match {
       case Nil => acc
-      case p::pss => if (pss.exists{pi => pi.LM | p.LM} || acc.exists{pi => pi.LM | p.LM}) red(pss,acc) else red(pss, p::acc)
+      case p::pss => 
+        if (pss.exists{pi => pi.LM | p.LM} || acc.exists{pi => pi.LM | p.LM}) red(pss,acc) 
+        else red(pss, p::acc)
     }
-    red(fs.toList, Nil).reverse.map{p => p / (Mono(mo.vars.map{_ => 0})(mo), p.LC)}
+    red(fs.toList, Nil).reverse.map{p => p / p.LC}
   }
-  def buchberger2(fs: Seq[Poly])(implicit mo: MonomialOrder): Seq[Poly] = {
+  def buchberger2[R, K<:Field[R,K], T<:Term[R,K,T], P<:Poly[R,K,T,P]](fs: Seq[P])(implicit mo: MonomialOrder): Seq[P] = {
     val s: Int = fs.length
-    val b:scala.collection.mutable.Set[(Int,Int)] = scala.collection.mutable.Set.empty
+    val b: MSet[(Int,Int)] = MSet.empty
     for(i <- Range(0,s); j <- Range(i+1, s)) yield {b += ((i,j))}
-    val gs: scala.collection.mutable.ArrayBuffer[Poly] = scala.collection.mutable.ArrayBuffer[Poly](fs:_*)
+    val gs: MArray[P] = MArray[P](fs:_*)
     var t: Int = s
     //
     def criterion(i:Int, j:Int): Boolean = {
@@ -142,8 +188,8 @@ object Poly {
       val fi = gs(i)
       val fj = gs(j)
       if ((Mono.LCM(fi.LM, fj.LM) != (fi.LM * fj.LM)) && (!criterion(i,j))) {
-        val spair = Poly.S(fi, fj).bar(gs)
-        if (spair != Poly(Nil)) {
+        val spair = Poly.S[R,K,T,P](fi, fj).bar(gs)
+        if (!spair.isZero) {
           t = t+1
           gs += spair
           for(ii <- Range(0, t-1)) yield {b += ((ii,t-1))}
@@ -153,11 +199,11 @@ object Poly {
     }    
     gs.toSeq
   }
-  def buchberger3(fs: Seq[Poly])(implicit mo: MonomialOrder): Seq[Poly] = {
+  def buchberger3[R, K<:Field[R,K], T<:Term[R,K,T], P<:Poly[R,K,T,P]](fs: Seq[P])(implicit mo: MonomialOrder): Seq[P] = {
     val s: Int = fs.length
-    val b:scala.collection.mutable.Set[(Int,Int)] = scala.collection.mutable.Set.empty
+    val b: MSet[(Int,Int)] = MSet.empty
     for(i <- Range(0,s); j <- Range(i+1, s)) yield {b += ((i,j))}
-    val gs: scala.collection.mutable.ArrayBuffer[Poly] = scala.collection.mutable.ArrayBuffer[Poly](fs:_*)
+    val gs: MArray[P] = MArray[P](fs:_*)
     var t: Int = s
     //
     def criterion(i:Int, j:Int): Boolean = {
@@ -173,8 +219,8 @@ object Poly {
       val fi = gs(i)
       val fj = gs(j)
       if ((Mono.LCM(fi.LM, fj.LM) != (fi.LM * fj.LM)) && (!criterion(i,j))) {
-        val spair = Poly.S(fi, fj).bar(gs.sortBy{g => g.LM.deg})
-        if (spair != Poly(Nil)) {
+        val spair = Poly.S[R,K,T,P](fi, fj).bar(gs.sortBy{g => g.LM.deg})
+        if (!spair.isZero) {
           t = t+1
           gs += spair
           for(ii <- Range(0, t-1)) yield {b += ((ii,t-1))}
@@ -183,5 +229,26 @@ object Poly {
       b -= ((i,j))
     }    
     gs.toSeq
+  }
+}
+object QPoly {
+  def S(f:QPoly, g:QPoly)(implicit mo: MonomialOrder): QPoly =
+    Poly.S[BigInt,Q,QTerm,QPoly](f, g)(mo)
+  def buchberger(fs: Seq[QPoly])(implicit mo: MonomialOrder): Seq[QPoly] =
+    Poly.buchberger[BigInt,Q,QTerm,QPoly](fs)(mo)
+  def buchberger2(fs: Seq[QPoly])(implicit mo: MonomialOrder): Seq[QPoly] =
+    Poly.buchberger2[BigInt,Q,QTerm,QPoly](fs)(mo)
+  def buchberger3(fs: Seq[QPoly])(implicit mo: MonomialOrder): Seq[QPoly] =
+    Poly.buchberger3[BigInt,Q,QTerm,QPoly](fs)(mo)
+  def reduce(fs: Seq[QPoly])(implicit mo: MonomialOrder): Seq[QPoly] =
+    Poly.reduce[BigInt,Q,QTerm,QPoly](fs)(mo)
+  def string2poly(s: String)(implicit monoOrd: MonomialOrder): QPoly = {
+    def f(revtokens: List[String], poly: QPoly): QPoly = revtokens match {
+      case tstring :: Nil => poly + QPoly(QTerm.string2term(tstring)::Nil)
+      case tstring :: "+" :: rest => f(rest, poly + QTerm.string2term(tstring))  
+      case tstring :: "-" :: rest => f(rest, poly - QTerm.string2term(tstring))  
+      case _ => throw new NumberFormatException(s)
+    }
+    f(s.split(" ").reverse.toList, QPoly(Nil))
   }
 }

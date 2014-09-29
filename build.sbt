@@ -9,10 +9,15 @@ scalaVersion := "2.11.0"
 // parallelExecution in Test := false
 
 resolvers ++= Seq(
-  "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/"
+  "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/",
+  "Sonatype Releases" at "http://oss.sonatype.org/content/repositories/releases",
+  "Sonatype OSS Snapshots" at "http://oss.sonatype.org/content/repositories/snapshots",
+  "Scalaz Bintray Repo" at "http://dl.bintray.com/scalaz/releases"  
 )
 
 libraryDependencies ++= Seq(
+  "org.specs2" %% "specs2" % "2.4.4" % "test",
+  "org.scalaz.stream" %% "scalaz-stream" % "0.5"
 )
 
 scalacOptions ++= Seq("-encoding", "UTF-8")
